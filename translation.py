@@ -1,4 +1,7 @@
 import ogr2osm
+import lights
+import utils
+import fairways
 
 # Debug option can be used to add unhandled items to output osm file
 DEBUG = False
@@ -7,21 +10,27 @@ class Translation(ogr2osm.TranslationBase):
     def filter_tags(self, tags):
         out = None
 
-        if 'KULKUSYV1' in tags:
-            out = parse_fairway(tags)
+        if 'NAVLIN_TY' in tags:
+            out = fairways.parse_fairway(tags)
 
         elif 'VAYALUE_SY' in tags:
-            out = parse_fairway_area(tags)
+            out = fairways.parse_fairway_area(tags)
 
         elif 'NAVLINJAT' in tags:
-            out = parse_navigation_line(tags)
+            out = fairways.parse_navigation_line(tags)
+
+        elif 'MAA_KANTO' in tags:
+            lights.collect_light(tags)
 
         elif 'TY_JNR' in tags:
-            seamark_type = to_int(tags['TY_JNR'])
+            seamark_type = utils.to_int(tags['TY_JNR'])
             if seamark_type in (TY_POIJU, TY_REUNAMERKKI, TY_VIITTA):
                 out = parse_buoy(seamark_type, tags)
             else:
                 out = parse_seamark(seamark_type, tags)
+
+        elif 'ALKUKULMA' in tags:
+            lights.collect_sector(tags)
 
         # TODO: remove
         if DEBUG and out is None:
@@ -30,13 +39,24 @@ class Translation(ogr2osm.TranslationBase):
 
         return out
 
+    def process_output(self, osmnodes, osmways, osmrelations):
+        fairways.split_recommended_tracks(osmways, osmnodes)
 
-def to_int(string):
-    return int(float(string))
+        REFS = []
+        for node in osmnodes:
+            if not node.tags:
+                continue
 
-def to_depth(string):
-    depth = float(string)
-    return f'{depth:0.1f}'
+            ref = node.tags['ref:vayla']
+            if ref in REFS:
+                print(f'Duplicate ref {ref}')
+            REFS.append(ref)
+
+            if 'ref:vayla' not in node.tags:
+                raise Exception(f"'ref:vayla' is missing from {node.tags}")
+            lights.process_light(node)
+
+
 
 
 TY_MERIMAJAKKA = 1
@@ -53,44 +73,11 @@ TY_KUMMELI = 13
 
 RAKT_LEVYKUMMELI = 7
 
-def parse_fairway(tags):
-    out = {
-        'waterway': 'fairway',
-    }
-
-    depths = [float(tags[key]) for key in ['KULKUSYV1', 'KULKUSYV2', 'KULKUSYV3'] if tags[key]]
-    if depths:
-        #TODO: check tag name
-        out['seamark:fairway:minimum_depth'] = to_depth(min(depths))
-
-    append_ref(out, to_int(tags['JNRO']))
-
-    return out
-
-
-def parse_fairway_area(tags):
-    out = {
-        'seamark:type': 'fairway',
-    }
-
-    if tags['VAYALUE_SY']:
-        #TODO: check tag name
-        out['seamark:fairway:minimum_depth'] = to_depth(tags['VAYALUE_SY'])
-
-    append_ref(out, to_int(tags['GDO_GID']))
-
-    return out
-
-
-def parse_navigation_line(tags):
-    return {
-        'seamark:type': 'navigation_line',
-    }
 
 
 def parse_buoy(seamark_type, tags):
     out = None
-    buoy_type = to_int(tags['NAVL_TYYP'])
+    buoy_type = utils.to_int(tags['NAVL_TYYP'])
     shape = seamark_type == TY_VIITTA and 'spar' or 'pillar'
 
     if buoy_type == 1:
@@ -99,6 +86,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_lateral:colour': 'red',
             'seamark:buoy_lateral:shape': shape,
             'seamark:buoy_lateral:system': 'iala-a',
+            'seamark:topmark:colour': 'red',
+            'seamark:topmark:shape': 'cylinder',
             'seamark:type': 'buoy_lateral',
         }
     elif buoy_type == 2:
@@ -107,6 +96,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_lateral:colour': 'green',
             'seamark:buoy_lateral:shape': shape,
             'seamark:buoy_lateral:system': 'iala-a',
+            'seamark:topmark:colour': 'green',
+            'seamark:topmark:shape': 'cone, point up',
             'seamark:type': 'buoy_lateral',
         }
     elif buoy_type == 3:
@@ -115,6 +106,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_cardinal:colour': 'black;yellow',
             'seamark:buoy_cardinal:colour_pattern': 'horizontal',
             'seamark:buoy_cardinal:shape': shape,
+            'seamark:topmark:colour': 'black',
+            'seamark:topmark:shape': '2 cones up',
             'seamark:type': 'buoy_cardinal',
         }
     elif buoy_type == 4:
@@ -123,6 +116,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_cardinal:colour': 'yellow;black',
             'seamark:buoy_cardinal:colour_pattern': 'horizontal',
             'seamark:buoy_cardinal:shape': shape,
+            'seamark:topmark:colour': 'black',
+            'seamark:topmark:shape': '2 cones down',
             'seamark:type': 'buoy_cardinal',
         }
     elif buoy_type == 5:
@@ -131,6 +126,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_cardinal:colour': 'yellow;black;yellow',
             'seamark:buoy_cardinal:colour_pattern': 'horizontal',
             'seamark:buoy_cardinal:shape': shape,
+            'seamark:topmark:colour': 'black',
+            'seamark:topmark:shape': '2 cones point together',
             'seamark:type': 'buoy_cardinal',
         }
     elif buoy_type == 6:
@@ -139,6 +136,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_cardinal:colour': 'black;yellow;black',
             'seamark:buoy_cardinal:colour_pattern': 'horizontal',
             'seamark:buoy_cardinal:shape': shape,
+            'seamark:topmark:colour': 'black',
+            'seamark:topmark:shape': '2 cones base together',
             'seamark:type': 'buoy_cardinal',
         }
     elif buoy_type == 7:
@@ -146,6 +145,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_isolated_danger:colour': 'black;red;black',
             'seamark:buoy_isolated_danger:colour_pattern': 'horizontal',
             'seamark:buoy_isolated_danger:shape': shape,
+            'seamark:topmark:colour': 'black',
+            'seamark:topmark:shape': '2 spheres',
             'seamark:type': 'buoy_isolated_danger',
         }
     elif buoy_type == 8:
@@ -153,6 +154,8 @@ def parse_buoy(seamark_type, tags):
             'seamark:buoy_safe_water:colour': 'red;white',
             'seamark:buoy_safe_water:colour_pattern': 'vertical',
             'seamark:buoy_safe_water:shape': shape,
+            'seamark:topmark:colour': 'red',
+            'seamark:topmark:shape': 'sphere',
             'seamark:type': 'buoy_safe_water',
         }
 
@@ -162,11 +165,7 @@ def parse_buoy(seamark_type, tags):
             'seamark:type': 'buoy_special_purpose',
         }
 
-    if out:
-        if tags['VALAISTU'] == 'K':
-            out['seamark:light:colour'] = out.get('seamark:buoy_lateral:colour', 'white')
-
-    append_ref(out, to_int(tags['TLNUMERO']))
+    utils.append_ref(out, utils.to_ref(tags['TLNUMERO']))
 
     return out
 
@@ -174,14 +173,26 @@ def parse_buoy(seamark_type, tags):
 def parse_seamark(seamark_type, tags):
     out = None
 
-    if seamark_type in (TY_MERIMAJAKKA, TY_SUURVIITTA, TY_SEKTORILOISTO):
+    if seamark_type == TY_MERIMAJAKKA:
+        out = {
+            'man_made': 'lighthouse',
+            'seamark:type': 'light_major',
+        }
+
+    elif seamark_type in (TY_SUURVIITTA, TY_SEKTORILOISTO):
         out = {
             'seamark:type': 'light_major',
         }
 
-    elif seamark_type == TY_SUUNTALOISTO:
+    if seamark_type == TY_SUUNTALOISTO:
         out = {
             'seamark:type': 'light_minor',
+        }
+
+    #TODO: radar, and parameters
+    elif seamark_type == TY_TUTKAMERKKI:
+        out = {
+            'seamark:type': 'radar_reflector',
         }
 
     elif seamark_type == TY_LINJAMERRKI:
@@ -190,7 +201,6 @@ def parse_seamark(seamark_type, tags):
             'seamark:type': 'beacon_special_purpose',
         }
         if tags['VALAISTU'] == 'K':
-            out['seamark:light:colour'] = 'white'
             if 'ylempi' in tags['NIMIS']:
                 out['seamark:light:category'] = 'upper'
             if 'alempi' in tags['NIMIS']:
@@ -211,24 +221,7 @@ def parse_seamark(seamark_type, tags):
                 'seamark:type': 'beacon_special_purpose',
             }
 
-    append_name(out, tags)
-    append_ref(out, to_int(tags['TLNUMERO']))
+    utils.append_name(out, tags)
+    utils.append_ref(out, utils.to_ref(tags['TLNUMERO']))
 
     return out
-
-def append_ref(out, ref):
-    if not ref or not out:
-        return
-    out['ref:source'] = str(ref)
-
-def append_name(out, tags):
-    if not tags or not out:
-        return
-
-    name_fi = tags.get('NIMIS', None)
-    name_sv = tags.get('NIMIR', None)
-    if name_fi:
-        out['name'] = name_fi
-        out['name:fi'] = name_fi
-    if name_sv:
-        out['name:sv'] = name_sv
